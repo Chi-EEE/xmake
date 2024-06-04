@@ -21,6 +21,7 @@
 import("core.base.json")
 import("core.base.semver")
 import("lib.detect.find_tool")
+import("package.manager.wally.configurations")
 
 function _download_zip(registry, scope, name, version, package_alias, root_dir, packagedir, headers)
 	import("utils.archive")
@@ -107,11 +108,6 @@ function main(name, opt)
 	opt = opt or {}
 	local configs = opt.configs or {}
 	
-	local wally = find_tool("wally")
-	if not wally then
-		raise("wally not found!")
-	end
-
 	local package_alias = configs.package_alias
 	if package_alias == "" then
 		raise("package_alias not found!")
@@ -121,11 +117,8 @@ function main(name, opt)
 		raise("package name(%s) not found!", name)
 	end
 
-	local wally_version, _ = os.iorunv(wally.program, { "--version" })
-	wally_version = string.match(wally_version, "wally (.*)")
-
 	local headers = {
-		"Wally-Version: " .. wally_version,
+		"Wally-Version: " .. configurations.wally_version(),
 	}
 
 	local registry = configs.registry

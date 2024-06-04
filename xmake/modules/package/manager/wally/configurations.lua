@@ -18,6 +18,10 @@
 -- @file        configurations.lua
 --
 
+function wally_version()
+	return "0.3.2"
+end
+
 function default_registry()
     return "https://api.wally.run"
 end
