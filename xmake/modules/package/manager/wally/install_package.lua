@@ -27,7 +27,7 @@ function _download_zip(registry, scope, name, version, package_alias, outdir, pa
 	local temp = os.tmpfile() .. ".zip"
 	local zip_url = registry .. "/v1/package-contents/" .. scope .. "/" .. name .. "/" .. version
 
-	try { function() return http.download(zip_url, temp, { headers = headers, timeout = 2 }) end}
+	try { function() return http.download(zip_url, temp, { headers = headers, timeout = 1 }) end}
 
 	os.mkdir(outdir)
 
@@ -47,7 +47,7 @@ function _install_dependencies(registry, dependencies, outdir, packagedir, heade
 		local temp = os.tmpfile() .. ".json"
 		local metadata_url = registry .. "/v1/package-metadata/" .. dep_scope .. "/" .. dep_name
 
-		try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 2 }) end}
+		try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 1 }) end}
 
 		local data = try { function() return json.decode(io.readfile(temp)) end }
 		if not data then
@@ -82,7 +82,7 @@ function _download_package_metadata(registry, scope, name, version, outdir, head
 	import("net.http")
 	local temp = os.tmpfile() .. ".json"
 	local metadata_url = registry .. "/v1/package-metadata/" .. scope .. "/" .. name
-	try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 2 }) end}
+	try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 1 }) end}
 	
 	local data = try { function() return json.decode(io.readfile(temp)) end }
 	if not data then
