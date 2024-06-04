@@ -21,13 +21,12 @@
 import("core.base.json")
 import("core.base.option")
 import("lib.detect.find_tool")
+import("package.manager.wally.configurations")
 
-function main(name, opt)
-	opt = opt or {}
-	local configs = opt.configs or {}
+function main(name)
 	import("net.http")
 	local temp = os.tmpfile()
-	http.download(configs.registry .. "/v1/package-search?query=" .. name, temp, { timeout = 10 })
+	http.download(configurations.default_registry() .. "/v1/package-search?query=" .. name, temp, { timeout = 10 })
 	local data = json.decode(io.readfile(temp))
 	local results = {}
 	for _, package in ipairs(data) do
