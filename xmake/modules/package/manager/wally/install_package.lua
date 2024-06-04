@@ -27,7 +27,7 @@ function _download_zip(registry, scope, name, version, package_alias, root_dir, 
 	local temp = os.tmpfile() .. ".zip"
 	local zip_url = registry .. "/v1/package-contents/" .. scope .. "/" .. name .. "/" .. version
 
-	try { function() return http.download(zip_url, temp, { headers = headers, timeout = 1 }) end}
+	try { function() return http.download(zip_url, temp, { headers = headers, read_timeout = 1 }) end}
 
 	os.mkdir(root_dir)
 
@@ -45,7 +45,7 @@ function _install_dependencies(registry, dependencies, root_dir, packagedir, hea
 		local temp = os.tmpfile() .. ".json"
 		local metadata_url = registry .. "/v1/package-metadata/" .. dep_scope .. "/" .. dep_name
 
-		try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 1 }) end}
+		try { function() return http.download(metadata_url, temp, { headers = headers, read_timeout = 1 }) end}
 
 		local data = try { function() return json.decode(io.readfile(temp)) end }
 		if not data then
