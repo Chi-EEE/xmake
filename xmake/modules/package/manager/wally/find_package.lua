@@ -56,7 +56,7 @@ function main(name, opt)
 		raise("Invalid version: %s", version)
 	end
 
-	local package_type = configs.type
+	local package_type = configs.package_type
 	local outdir = os.projectdir()
 	if package_type == "default" then
 		outdir = path.join(outdir, "Packages")

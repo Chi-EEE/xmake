@@ -135,7 +135,7 @@ function main(name, opt)
 	local scope = split[1]
 	local name = split[2]
 	local version = opt.require_version
-	local package_type = configs.type
+	local package_type = configs.package_type
 
 	local outdir = os.projectdir()
 	if package_type == "default" then
