@@ -74,7 +74,7 @@ function _install_dependencies(registry, dependencies, outdir, packagedir, heade
 
 		_download_zip(registry, dep_scope, dep_name, dep_version, dep_package_alias, outdir, dep_packagedir, headers)
 
-		io.writefile(path.join(path.directory(packagedir), dep_package_alias .. ".lua"), string.format([[return require(script.Parent.Parent._Index["%s_%s@%s"]["%s"])]], dep_scope, dep_name, dep_version, dep_name))
+		io.writefile(path.join(path.directory(packagedir), dep_package_alias .. ".lua"), string.format([[return require(script.Parent.Parent["%s_%s@%s"]["%s"])]], dep_scope, dep_name, dep_version, dep_name))
 	end
 end
 

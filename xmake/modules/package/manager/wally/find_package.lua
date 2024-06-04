@@ -69,11 +69,7 @@ function main(name, opt)
 
 	local result = nil
 	if os.exists(packagedir) then
-		print("Found: " .. packagedir)
-		result = { includedirs = {}, linkdirs = {}, links = {} }
-		table.insert(result.includedirs, packagedir)
-		table.insert(result.linkdirs, packagedir)
-		table.insert(result.links, packagedir)
+		result = { includedirs = packagedir, linkdirs = packagedir, links = packagedir, version = version }
 	end
 	return result
 end

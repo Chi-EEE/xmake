@@ -18,10 +18,14 @@
 -- @file        configurations.lua
 --
 
+function default_registry()
+    return "https://api.wally.run"
+end
+
 function main()
 	return {
 		package_alias = { description = "The package alias.", default = "", type = "string" },
 		type = { description = "Set the package type.", default = "default", values = { "default", "server", "dev" } },
-		registry = { description = "Set the registry server.", default = "https://api.wally.run" },
+		registry = { description = "Set the registry server.", default = default_registry() },
 	}
 end
