@@ -22,62 +22,13 @@ import("core.base.json")
 import("core.base.semver")
 import("lib.detect.find_tool")
 
-function main(name, opt)
-	opt = opt or {}
-	local configs = opt.configs or {}
-	local wally = find_tool("wally")
-	if not wally then
-		raise("wally not found!")
-	end
-
-	local package_name = configs.package_name
-	if package_name == "" then
-		raise("package_name not found!")
-	end
-
-	if not name:find("/") then
-		raise("package name(%s) not found!", name)
-	end
-
-	local split = name:split("/", { plain = true })
-	local scope = split[1]
-	local name = split[2]
-
-	import("net.http")
-	local version = opt.require_version
-	local temp = os.tmpfile()
-	http.download(configs.registry .. "/v1/package-metadata/" .. scope .. "/" .. name, temp, { timeout = 10 })
-	local data = json.decode(io.readfile(temp))
-	local latest_package = data.versions[1]
-	local dependencies = latest_package.dependencies
-	print(dependencies)
-	if version == "latest" then
-		version = latest_package.package.version
-	else
-		version = string.trim(version)
-	end
-
-	if not semver.is_valid(version) then
-		raise("Invalid version: %s", version)
-	end
-
+function _download_zip(registry, scope, name, version, package_alias, package_type, headers)
 	import("utils.archive")
 	local temp = os.tmpfile() .. ".zip"
-	local zip_url = configs.registry .. "/v1/package-contents/" .. scope .. "/" .. name .. "/" .. version
-	local wally_version, _ = os.iorunv(wally.program, { "--version" })
-	wally_version = string.match(wally_version, "wally (.*)")
+	local zip_url = registry .. "/v1/package-contents/" .. scope .. "/" .. name .. "/" .. version
 
-	local headers = {
-		"Wally-Version: " .. wally_version,
-	}
-
-	try({
-		function()
-			return http.download(zip_url, temp, { headers = headers, timeout = 10 })
-		end,
-	})
-
-	local package_type = configs.type
+	try { function() return http.download(zip_url, temp, { headers = headers, timeout = 10 }) end}
+	
 	local outdir = os.projectdir()
 	if package_type == "default" then
 		outdir = path.join(outdir, "Packages")
@@ -90,16 +41,113 @@ function main(name, opt)
 
 	os.mkdir(outdir)
 
-	local ok = try({
-		function()
-			archive.extract(temp, packagedir)
-			return true
-		end,
-	})
+	local ok = try { function() archive.extract(temp, packagedir); return true end }
 	if not ok then
+		raise("Failed to extract package %s", name)
 		return
 	end
-	io.writefile(path.join(outdir, package_name .. ".lua"), [[
-return require(script.Parent._Index["]] .. scope .. [[_]] .. name .. [[@]] .. version .. [["]["]] .. name .. [["])
-]])
+
+	io.writefile(path.join(outdir, package_alias .. ".lua"), string.format([[return require(script.Parent._Index["%s_%s@%s"]["%s"])]], scope, name, version, name))
+end
+
+function _install_dependencies(registry, dependencies, headers)
+	for dep_package_alias, dep in pairs(dependencies) do
+		local dep_scope, dep_name, dep_range = string.match(dep, [[(%w+)/(%w+)@(.+)]])
+		dep_range = dep_range:replace(",", "")
+		local temp = os.tmpfile() .. ".json"
+		local metadata_url = registry .. "/v1/package-metadata/" .. dep_scope .. "/" .. dep_name
+
+		try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 10 }) end}
+
+		local data = try { function() return json.decode(io.readfile(temp)) end }
+		if not data then
+			raise("Failed to fetch dependency package %s", dep_package_alias)
+			return
+		end
+		local packages = {}
+		for _, dep_package in ipairs(data.versions) do
+			if semver.satisfies(dep_package.package.version, dep_range) then
+				table.insert(packages, dep_package)
+			end
+		end
+		table.sort(packages, function(a, b)
+			local a_version = semver.new(a.package.version)
+			local b_version = semver.new(b.package.version)
+			return a_version:gt(b_version)
+		end)
+		local latest_package = packages[1]
+		local dep_dependencies = latest_package.dependencies
+		local dep_version = latest_package.package.version
+
+		_install_dependencies(registry, dep_dependencies, headers)
+
+		_download_zip(registry, dep_scope, dep_name, dep_version, dep_package_alias, "default", headers)
+	end
+end
+
+function _download_package_metadata(registry, scope, name, version, headers)
+	import("net.http")
+	local temp = os.tmpfile() .. ".json"
+	local metadata_url = registry .. "/v1/package-metadata/" .. scope .. "/" .. name
+	try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 10 }) end}
+	
+	local data = try { function() return json.decode(io.readfile(temp)) end }
+	if not data then
+		raise("Failed to fetch package %s", name)
+		return
+	end
+
+	local latest_package = data.versions[1]
+	local dependencies = latest_package.dependencies
+
+	_install_dependencies(registry, dependencies, headers)
+
+	if version == "latest" then
+		version = latest_package.package.version
+	else
+		version = string.trim(version)
+	end
+
+	return version
+end
+
+function main(name, opt)
+	opt = opt or {}
+	local configs = opt.configs or {}
+	local wally = find_tool("wally")
+	if not wally then
+		raise("wally not found!")
+	end
+
+	local package_alias = configs.package_alias
+	if package_alias == "" then
+		raise("package_alias not found!")
+	end
+
+	if not name:find("/") then
+		raise("package name(%s) not found!", name)
+	end
+	
+	local wally_version, _ = os.iorunv(wally.program, { "--version" })
+	wally_version = string.match(wally_version, "wally (.*)")
+
+	local headers = {
+		"Wally-Version: " .. wally_version,
+	}
+
+	local registry = configs.registry
+
+	local split = name:split("/", { plain = true })
+	local scope = split[1]
+	local name = split[2]
+	local version = opt.require_version
+
+	version = _download_package_metadata(registry, scope, name, version, headers)
+
+	if not semver.is_valid(version) then
+		raise("Invalid version: %s", version)
+	end
+
+	local package_type = configs.type
+	_download_zip(registry, scope, name, version, package_alias, package_type, headers)
 end
