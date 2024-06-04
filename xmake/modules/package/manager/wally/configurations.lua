@@ -25,7 +25,7 @@ end
 function main()
 	return {
 		package_alias = { description = "The package alias.", default = "", type = "string" },
-		package_type = { description = "Set the package type.", default = "default", values = { "default", "server", "dev" } },
+		root_dir = { description = "Set the root directory.", default = path.join(os.projectdir(), "Packages") },
 		registry = { description = "Set the registry server.", default = default_registry() },
 	}
 end

@@ -56,16 +56,7 @@ function main(name, opt)
 		raise("Invalid version: %s", version)
 	end
 
-	local package_type = configs.package_type
-	local outdir = os.projectdir()
-	if package_type == "default" then
-		outdir = path.join(outdir, "Packages")
-	elseif package_type == "server" then
-		outdir = path.join(outdir, "ServerPackages")
-	elseif package_type == "dev" then
-		outdir = path.join(outdir, "DevPackages")
-	end
-	local packagedir = path.join(outdir, "_Index", scope .. "_" .. name .. "@" .. version, name)
+	local packagedir = path.join(configs.root_dir, "_Index", scope .. "_" .. name .. "@" .. version, name)
 
 	local result = nil
 	if os.exists(packagedir) then

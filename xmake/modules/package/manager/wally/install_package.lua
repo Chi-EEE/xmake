@@ -22,14 +22,14 @@ import("core.base.json")
 import("core.base.semver")
 import("lib.detect.find_tool")
 
-function _download_zip(registry, scope, name, version, package_alias, outdir, packagedir, headers)
+function _download_zip(registry, scope, name, version, package_alias, root_dir, packagedir, headers)
 	import("utils.archive")
 	local temp = os.tmpfile() .. ".zip"
 	local zip_url = registry .. "/v1/package-contents/" .. scope .. "/" .. name .. "/" .. version
 
 	try { function() return http.download(zip_url, temp, { headers = headers, timeout = 1 }) end}
 
-	os.mkdir(outdir)
+	os.mkdir(root_dir)
 
 	local ok = try { function() archive.extract(temp, packagedir); return true end }
 	if not ok then
@@ -38,7 +38,7 @@ function _download_zip(registry, scope, name, version, package_alias, outdir, pa
 	end
 end
 
-function _install_dependencies(registry, dependencies, outdir, packagedir, headers)
+function _install_dependencies(registry, dependencies, root_dir, packagedir, headers)
 	for dep_package_alias, dep in pairs(dependencies) do
 		local dep_scope, dep_name, dep_range = string.match(dep, [[(%w+)/(%w+)@(.+)]])
 		dep_range = dep_range:replace(",", "")
@@ -66,17 +66,17 @@ function _install_dependencies(registry, dependencies, outdir, packagedir, heade
 		local latest_package = packages[1]
 		local dep_dependencies = latest_package.dependencies
 		local dep_version = latest_package.package.version
-		local dep_packagedir = path.join(outdir, "_Index", dep_scope .. "_" .. dep_name .. "@" .. dep_version, dep_name)
+		local dep_packagedir = path.join(root_dir, "_Index", dep_scope .. "_" .. dep_name .. "@" .. dep_version, dep_name)
 
-		_install_dependencies(registry, dep_dependencies, outdir, dep_packagedir, headers)
+		_install_dependencies(registry, dep_dependencies, root_dir, dep_packagedir, headers)
 
-		_download_zip(registry, dep_scope, dep_name, dep_version, dep_package_alias, outdir, dep_packagedir, headers)
+		_download_zip(registry, dep_scope, dep_name, dep_version, dep_package_alias, root_dir, dep_packagedir, headers)
 
 		io.writefile(path.join(path.directory(packagedir), dep_package_alias .. ".lua"), string.format("return require(script.Parent.Parent[\"%s_%s@%s\"][\"%s\"])\n", dep_scope, dep_name, dep_version, dep_name))
 	end
 end
 
-function _download_package_metadata(registry, scope, name, version, outdir, headers)
+function _download_package_metadata(registry, scope, name, version, root_dir, headers)
 	import("net.http")
 	local temp = os.tmpfile() .. ".json"
 	local metadata_url = registry .. "/v1/package-metadata/" .. scope .. "/" .. name
@@ -90,9 +90,9 @@ function _download_package_metadata(registry, scope, name, version, outdir, head
 
 	local latest_package = data.versions[1]
 	local dependencies = latest_package.dependencies
-	local packagedir = path.join(outdir, "_Index", scope .. "_" .. name .. "@" .. version, name)
+	local packagedir = path.join(root_dir, "_Index", scope .. "_" .. name .. "@" .. version, name)
 
-	_install_dependencies(registry, dependencies, outdir, packagedir, headers)
+	_install_dependencies(registry, dependencies, root_dir, packagedir, headers)
 
 	if version == "latest" then
 		version = latest_package.package.version
@@ -133,26 +133,18 @@ function main(name, opt)
 	local scope = split[1]
 	local name = split[2]
 	local version = opt.require_version
-	local package_type = configs.package_type
 
-	local outdir = os.projectdir()
-	if package_type == "default" then
-		outdir = path.join(outdir, "Packages")
-	elseif package_type == "server" then
-		outdir = path.join(outdir, "ServerPackages")
-	elseif package_type == "dev" then
-		outdir = path.join(outdir, "DevPackages")
-	end
+	local root_dir = configs.root_dir
 
-	version = _download_package_metadata(registry, scope, name, version, outdir, headers)
+	version = _download_package_metadata(registry, scope, name, version, root_dir, headers)
 
 	if not semver.is_valid(version) then
 		raise("Invalid version: %s", version)
 	end
 
-	local packagedir = path.join(outdir, "_Index", scope .. "_" .. name .. "@" .. version, name)
+	local packagedir = path.join(root_dir, "_Index", scope .. "_" .. name .. "@" .. version, name)
 
-	_download_zip(registry, scope, name, version, package_alias, outdir, packagedir, headers)
+	_download_zip(registry, scope, name, version, package_alias, root_dir, packagedir, headers)
 
-	io.writefile(path.join(outdir, package_alias .. ".lua"), string.format("return require(script.Parent._Index[\"%s_%s@%s\"][\"%s\"])\n", scope, name, version, name))
+	io.writefile(path.join(root_dir, package_alias .. ".lua"), string.format("return require(script.Parent._Index[\"%s_%s@%s\"][\"%s\"])\n", scope, name, version, name))
 end
