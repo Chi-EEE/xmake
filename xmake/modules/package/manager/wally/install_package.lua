@@ -36,8 +36,6 @@ function _download_zip(registry, scope, name, version, package_alias, outdir, pa
 		raise("Failed to extract package %s", name)
 		return
 	end
-
-	io.writefile(path.join(outdir, package_alias .. ".lua"), string.format("return require(script.Parent._Index[\"%s_%s@%s\"][\"%s\"])\n", scope, name, version, name))
 end
 
 function _install_dependencies(registry, dependencies, outdir, packagedir, headers)
@@ -153,5 +151,8 @@ function main(name, opt)
 	end
 
 	local packagedir = path.join(outdir, "_Index", scope .. "_" .. name .. "@" .. version, name)
+
 	_download_zip(registry, scope, name, version, package_alias, outdir, packagedir, headers)
+
+	io.writefile(path.join(outdir, package_alias .. ".lua"), string.format("return require(script.Parent._Index[\"%s_%s@%s\"][\"%s\"])\n", scope, name, version, name))
 end
