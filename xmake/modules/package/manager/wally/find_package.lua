@@ -25,10 +25,6 @@ import("lib.detect.find_tool")
 function main(name, opt)
 	opt = opt or {}
 	local configs = opt.configs or {}
-	local wally = find_tool("wally")
-	if not wally then
-		raise("wally not found!")
-	end
 
 	if not name:find("/") then
 		raise("package name(%s) not found!", name)

@@ -106,10 +106,6 @@ end
 function main(name, opt)
 	opt = opt or {}
 	local configs = opt.configs or {}
-	local wally = find_tool("wally")
-	if not wally then
-		raise("wally not found!")
-	end
 
 	local package_alias = configs.package_alias
 	if package_alias == "" then
@@ -120,11 +116,8 @@ function main(name, opt)
 		raise("package name(%s) not found!", name)
 	end
 	
-	local wally_version, _ = os.iorunv(wally.program, { "--version" })
-	wally_version = string.match(wally_version, "wally (.*)")
-
 	local headers = {
-		"Wally-Version: " .. wally_version,
+		"Wally-Version: 0.0.0",
 	}
 
 	local registry = configs.registry
