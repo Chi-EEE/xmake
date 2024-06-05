@@ -40,7 +40,7 @@ function main(name, opt)
 
 	if require_version == "latest" then
 		local temp = os.tmpfile()
-		http.download(configs.registry .. "/v1/package-metadata/" .. scope .. "/" .. name, temp, { timeout = 10 })
+		http.download(configs.registry .. "/v1/package-metadata/" .. scope .. "/" .. name, temp, { read_timeout = 1 })
 		local data = json.decode(io.readfile(temp))
 		local latest_package = data.versions[1]
 		version = latest_package.package.version
