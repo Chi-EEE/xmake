@@ -88,7 +88,7 @@ function _download_package_metadata(registry, scope, name, version, root_dir, he
 	import("net.http")
 	local temp = os.tmpfile() .. ".json"
 	local metadata_url = registry .. "/v1/package-metadata/" .. scope .. "/" .. name
-	try { function() return http.download(metadata_url, temp, { headers = headers, timeout = 1 }) end}
+	try { function() return http.download(metadata_url, temp, { headers = headers, read_timeout = 1 }) end}
 	
 	local data = try { function() return json.decode(io.readfile(temp)) end }
 	if not data then
