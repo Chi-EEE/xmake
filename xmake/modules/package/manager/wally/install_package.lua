@@ -23,6 +23,7 @@ import("core.base.semver")
 import("lib.detect.find_tool")
 import("package.manager.wally.configurations")
 
+-- download zip and extract
 function _download_zip(registry, scope, name, version, package_alias, root_dir, packagedir, headers)
 	import("utils.archive")
 	local temp = os.tmpfile() .. ".zip"
@@ -39,6 +40,7 @@ function _download_zip(registry, scope, name, version, package_alias, root_dir, 
 	end
 end
 
+-- install dependencies
 function _install_dependencies(registry, dependencies, root_dir, packagedir, headers)
 	for dep_package_alias, dep in pairs(dependencies) do
 		local dep_scope, dep_name, dep_range = string.match(dep, [[(%w+)/(%w+)@(.+)]])
@@ -55,15 +57,19 @@ function _install_dependencies(registry, dependencies, root_dir, packagedir, hea
 		end
 		local packages = {}
 		for _, dep_package in ipairs(data.versions) do
+			-- check if the version satisfies the range
 			if semver.satisfies(dep_package.package.version, dep_range) then
 				table.insert(packages, dep_package)
 			end
 		end
+
+		-- sort by version
 		table.sort(packages, function(a, b)
 			local a_version = semver.new(a.package.version)
 			local b_version = semver.new(b.package.version)
 			return a_version:gt(b_version)
 		end)
+		
 		local latest_package = packages[1]
 		local dep_dependencies = latest_package.dependencies
 		local dep_version = latest_package.package.version
@@ -77,6 +83,7 @@ function _install_dependencies(registry, dependencies, root_dir, packagedir, hea
 	end
 end
 
+-- download package metadata
 function _download_package_metadata(registry, scope, name, version, root_dir, headers)
 	import("net.http")
 	local temp = os.tmpfile() .. ".json"
@@ -89,21 +96,37 @@ function _download_package_metadata(registry, scope, name, version, root_dir, he
 		return
 	end
 
-	local latest_package = data.versions[1]
-	local dependencies = latest_package.dependencies
-	local packagedir = path.join(root_dir, "_Index", scope .. "_" .. name .. "@" .. version, name)
-
-	_install_dependencies(registry, dependencies, root_dir, packagedir, headers)
-
+	local chosen_package 
 	if version == "latest" then
+		chosen_package = data.versions[1]
 		version = latest_package.package.version
 	else
-		version = string.trim(version)
+		for _, package in ipairs(data.versions) do
+			if semver.satisfies(package.package.version, version) then
+				chosen_package = package
+				version = package.package.version
+				break
+			end
+		end
 	end
+	if not chosen_package then
+		raise("Package version %s of %s/%s not found!", version, scope, name)
+		return
+	end
+	local dependencies = chosen_package.dependencies
+	local packagedir = path.join(root_dir, "_Index", scope .. "_" .. name .. "@" .. version, name)
+	_install_dependencies(registry, dependencies, root_dir, packagedir, headers)
 
 	return version
 end
 
+-- install package
+--
+-- @param name  the package name
+-- @param opt   the options, e.g. {verbose = true, package_alias = "the package alias", root_dir = "the root directory"}
+--
+-- @return      true or false
+--
 function main(name, opt)
 	opt = opt or {}
 	local configs = opt.configs or {}
