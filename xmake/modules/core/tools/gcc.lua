@@ -386,7 +386,14 @@ end
 
 -- make the rpathdir flag
 function nf_rpathdir(self, dir, opt)
+    if self:is_plat("windows", "mingw") then
+        return
+    end
     opt = opt or {}
+    local extra = opt.extra
+    if extra and extra.installonly then
+        return
+    end
     dir = path.translate(dir)
     if self:has_flags("-Wl,-rpath=" .. dir, "ldflags") then
         local flags = {"-Wl,-rpath=" .. (dir:gsub("@[%w_]+", function (name)
@@ -395,7 +402,6 @@ function nf_rpathdir(self, dir, opt)
         end))}
         -- add_rpathdirs("...", {runpath = false})
         -- https://github.com/xmake-io/xmake/issues/5109
-        local extra = opt.extra
         if extra then
             if extra.runpath == false and self:has_flags("-Wl,-rpath=" .. dir .. ",--disable-new-dtags", "ldflags") then
                 flags[1] = flags[1] .. ",--disable-new-dtags"
@@ -802,7 +808,7 @@ function _compargv_pch(self, pcheaderfile, pcoutputfile, flags, opt)
     local pchflags = {}
     local include = false
     for _, flag in ipairs(flags) do
-        if not flag:find("-include", 1, true) then
+        if not flag:startswith("-include") then
             if not include then
                 table.insert(pchflags, flag)
             end

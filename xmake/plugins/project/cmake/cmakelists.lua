@@ -26,6 +26,7 @@ import("core.tool.compiler")
 import("core.base.semver")
 import("core.base.hashset")
 import("core.project.rule")
+import("core.platform.platform")
 import("lib.detect.find_tool")
 import("private.utils.batchcmds")
 import("private.utils.rule_groups")
@@ -255,6 +256,17 @@ function _map_compflags(toolname, langkind, name, values)
     return compiler.map_flags(langkind, name, values, {target = fake_target})
 end
 
+-- split flag with tool prefix, e.g. clang::-Dclang
+function _split_flag_with_tool_prefix(flag)
+    local prefix
+    local splitinfo = flag:split("::")
+    if #splitinfo == 2 then
+        prefix = splitinfo[1]
+        flag = splitinfo[2]
+    end
+    return prefix, flag
+end
+
 -- get flags from fileconfig
 function _get_flags_from_fileconfig(fileconfig, outputdir, name)
     local flags = {}
@@ -271,8 +283,48 @@ end
 -- get flags from target
 -- @see https://github.com/xmake-io/xmake/issues/3594
 function _get_flags_from_target(target, flagkind)
+    local results = {}
     local flags = _get_configs_from_target(target, flagkind)
-    return target_utils.translate_flags_in_tool(target, flagkind, flags)
+    for _, flag in ipairs(flags) do
+        local tools = target:extraconf(flagkind, flag, "tools")
+        if not flag:find("::", 1, true) and tools then
+            for _, toolname in ipairs(tools) do
+                table.insert(results, toolname .. "::" .. flag)
+            end
+        else
+            table.insert(results, flag)
+        end
+    end
+    return results
+end
+
+-- set compiler
+function _set_compiler(cmakelists)
+    if config.get("toolchain") then
+        local cc = platform.tool("cc")
+        if cc then
+            cc = path.unix(cc)
+            cmakelists:print("set(CMAKE_C_COMPILER \"%s\")", cc)
+        end
+        local cxx, cxx_name = platform.tool("cxx")
+        if cxx then
+            if cxx_name == "clang" or cxx_name == "gcc" then
+                local dir = path.directory(cxx)
+                local name = path.filename(cxx)
+                name = name:gsub("clang$", "clang++")
+                name = name:gsub("clang%-", "clang++-")
+                name = name:gsub("gcc$", "g++")
+                name = name:gsub("gcc%-", "g++-")
+                if dir ~= '.' then
+                    cxx = path.join(dir, name)
+                else
+                    cxx = name
+                end
+            end
+            cxx = path.unix(cxx)
+            cmakelists:print("set(CMAKE_CXX_COMPILER \"%s\")", cxx)
+        end
+    end
 end
 
 -- add project info
@@ -289,6 +341,12 @@ function _add_project(cmakelists, outputdir)
         -- for MSVC_RUNTIME_LIBRARY
         cmakelists:print("cmake_policy(SET CMP0091 NEW)")
     end
+
+    -- set compilers, we need set it before project( LANGUAGES..)
+    -- @see https://github.com/xmake-io/xmake/issues/5448
+    _set_compiler(cmakelists)
+
+    -- set project name
     local project_name = project.name()
     if not project_name then
         for _, target in table.orderpairs(project.targets()) do
@@ -333,39 +391,8 @@ function _add_target_phony(cmakelists, target)
     cmakelists:print("")
 end
 
--- set compiler
-function _set_target_compiler(cmakelists, target)
-    -- use custom toolchain?
-    if config.get("toolchain") or target:get("toolchains") then
-        local cc = target:tool("cc")
-        if cc then
-            cc = path.unix(cc)
-            cmakelists:print("set(CMAKE_C_COMPILER \"%s\")", cc)
-        end
-        local cxx, cxx_name = target:tool("cxx")
-        if cxx then
-            if cxx_name == "clang" or cxx_name == "gcc" then
-                local dir = path.directory(cxx)
-                local name = path.filename(cxx)
-                name = name:gsub("clang$", "clang++")
-                name = name:gsub("clang%-", "clang++-")
-                name = name:gsub("gcc$", "g++")
-                name = name:gsub("gcc%-", "g++-")
-                if dir ~= '.' then
-                    cxx = path.join(dir, name)
-                else
-                    cxx = name
-                end
-            end
-            cxx = path.unix(cxx)
-            cmakelists:print("set(CMAKE_CXX_COMPILER \"%s\")", cxx)
-        end
-    end
-end
-
 -- add target: binary
 function _add_target_binary(cmakelists, target, outputdir)
-    _set_target_compiler(cmakelists, target)
     cmakelists:print("add_executable(%s \"\")", target:name())
     cmakelists:print("set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")", target:name(), target:basename())
     cmakelists:print("set_target_properties(%s PROPERTIES RUNTIME_OUTPUT_DIRECTORY \"%s\")", target:name(), _get_relative_unix_path_to_cmake(target:targetdir(), outputdir))
@@ -373,7 +400,6 @@ end
 
 -- add target: static
 function _add_target_static(cmakelists, target, outputdir)
-    _set_target_compiler(cmakelists, target)
     cmakelists:print("add_library(%s STATIC \"\")", target:name())
     cmakelists:print("set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")", target:name(), target:basename())
     cmakelists:print("set_target_properties(%s PROPERTIES ARCHIVE_OUTPUT_DIRECTORY \"%s\")", target:name(), _get_relative_unix_path_to_cmake(target:targetdir(), outputdir))
@@ -381,7 +407,6 @@ end
 
 -- add target: shared
 function _add_target_shared(cmakelists, target, outputdir)
-    _set_target_compiler(cmakelists, target)
     cmakelists:print("add_library(%s SHARED \"\")", target:name())
     cmakelists:print("set_target_properties(%s PROPERTIES OUTPUT_NAME \"%s\")", target:name(), target:basename())
     if target:is_plat("windows") then
@@ -627,26 +652,74 @@ function _add_target_compile_options(cmakelists, target, outputdir)
     local cxflags  = _get_flags_from_target(target, "cxflags")
     local cxxflags = _get_flags_from_target(target, "cxxflags")
     local cuflags  = _get_flags_from_target(target, "cuflags")
-    if #cflags > 0 or #cxflags > 0 or #cxxflags > 0 or #cuflags > 0 then
-        cmakelists:print("target_compile_options(%s PRIVATE", target:name())
-        for _, flag in ipairs(_translate_flags(cflags, outputdir)) do
-            flag = _escape_path_in_flag(target, flag)
-            cmakelists:print("    $<$<COMPILE_LANGUAGE:C>:" .. flag .. ">")
+    local toolnames = hashset.new()
+    local function _add_target_compile_options_for_compiler(toolname)
+        if #cflags > 0 or #cxflags > 0 or #cxxflags > 0 or #cuflags > 0 then
+            cmakelists:print("target_compile_options(%s PRIVATE", target:name())
+            for _, flag in ipairs(_translate_flags(cflags, outputdir)) do
+                local prefix
+                prefix, flag = _split_flag_with_tool_prefix(flag)
+                if prefix == toolname then
+                    flag = _escape_path_in_flag(target, flag)
+                    cmakelists:print("    $<$<COMPILE_LANGUAGE:C>:" .. flag .. ">")
+                end
+                if prefix then
+                    toolnames:insert(prefix)
+                end
+            end
+            for _, flag in ipairs(_translate_flags(cxflags, outputdir)) do
+                local prefix
+                prefix, flag = _split_flag_with_tool_prefix(flag)
+                if prefix == toolname then
+                    flag = _escape_path_in_flag(target, flag)
+                    cmakelists:print("    $<$<COMPILE_LANGUAGE:C>:" .. flag .. ">")
+                    cmakelists:print("    $<$<COMPILE_LANGUAGE:CXX>:" .. flag .. ">")
+                end
+                if prefix then
+                    toolnames:insert(prefix)
+                end
+            end
+            for _, flag in ipairs(_translate_flags(cxxflags, outputdir)) do
+                local prefix
+                prefix, flag = _split_flag_with_tool_prefix(flag)
+                if prefix == toolname then
+                    flag = _escape_path_in_flag(target, flag)
+                    cmakelists:print("    $<$<COMPILE_LANGUAGE:CXX>:" .. flag .. ">")
+                end
+                if prefix then
+                    toolnames:insert(prefix)
+                end
+            end
+            for _, flag in ipairs(_translate_flags(cuflags, outputdir)) do
+                local prefix
+                prefix, flag = _split_flag_with_tool_prefix(flag)
+                if prefix == toolname then
+                    flag = _escape_path_in_flag(target, flag)
+                    cmakelists:print("    $<$<COMPILE_LANGUAGE:CUDA>:" .. flag .. ">")
+                end
+                if prefix then
+                    toolnames:insert(prefix)
+                end
+            end
+            cmakelists:print(")")
         end
-        for _, flag in ipairs(_translate_flags(cxflags, outputdir)) do
-            flag = _escape_path_in_flag(target, flag)
-            cmakelists:print("    $<$<COMPILE_LANGUAGE:C>:" .. flag .. ">")
-            cmakelists:print("    $<$<COMPILE_LANGUAGE:CXX>:" .. flag .. ">")
+    end
+    _add_target_compile_options_for_compiler()
+    local compilernames = {
+        clang = "Clang",
+        clangxx = "Clang",
+        gcc = "Gcc",
+        gxx = "Gcc",
+        cl = "MSVC",
+        link = "MSVC"
+    }
+    for _, toolname in toolnames:keys() do
+        local name = compilernames[toolname]
+        if name then
+            cmakelists:print("if(%s)", name)
+            _add_target_compile_options_for_compiler(toolname)
+            cmakelists:print("endif()")
         end
-        for _, flag in ipairs(_translate_flags(cxxflags, outputdir)) do
-            flag = _escape_path_in_flag(target, flag)
-            cmakelists:print("    $<$<COMPILE_LANGUAGE:CXX>:" .. flag .. ">")
-        end
-        for _, flag in ipairs(_translate_flags(cuflags, outputdir)) do
-            flag = _escape_path_in_flag(target, flag)
-            cmakelists:print("    $<$<COMPILE_LANGUAGE:CUDA>:" .. flag .. ">")
-        end
-        cmakelists:print(")")
     end
 
     -- add cflags/cxxflags for the specific source files
@@ -793,10 +866,10 @@ function _add_target_optimization(cmakelists, target)
     local flags_msvc =
     {
         none        = "$<$<CONFIG:Debug>:-Od>"
-    ,   faster      = "$<$<CONFIG:Release>:-O2>"
-    ,   fastest     = "$<$<CONFIG:Release>:-Ox -fp:fast>"
+    ,   faster      = "$<$<CONFIG:Release>:-Ox>"
+    ,   fastest     = "$<$<CONFIG:Release>:-O2>"
     ,   smallest    = "$<$<CONFIG:Release>:-O1>"
-    ,   aggressive  = "$<$<CONFIG:Release>:-Ox -fp:fast>"
+    ,   aggressive  = "$<$<CONFIG:Release>:-O2>"
     }
     local optimization = target:get("optimize")
     if optimization then
@@ -953,30 +1026,57 @@ end
 
 -- add target link options
 function _add_target_link_options(cmakelists, target, outputdir)
-    local ldflags = _get_configs_from_target(target, "ldflags")
-    local shflags = _get_configs_from_target(target, "shflags")
-    if #ldflags > 0 or #shflags > 0 then
-        local flags = {}
-        for _, flag in ipairs(table.unique(table.join(ldflags, shflags))) do
-            table.insert(flags, _translate_flag(flag, outputdir))
-        end
-        if #flags > 0 then
-            local cmake_minver = _get_cmake_minver()
-            if cmake_minver:ge("3.13.0") then
-                cmakelists:print("target_link_options(%s PRIVATE", target:name())
-            else
-                cmakelists:print("target_link_libraries(%s PRIVATE", target:name())
+    local ldflags = _get_flags_from_target(target, "ldflags")
+    local shflags = _get_flags_from_target(target, "shflags")
+    local toolnames = hashset.new()
+    local function _add_target_link_options_for_linker(toolname)
+        if #ldflags > 0 or #shflags > 0 then
+            local flags = {}
+            for _, flag in ipairs(table.unique(table.join(ldflags, shflags))) do
+                table.insert(flags, _translate_flag(flag, outputdir))
             end
-            for _, flag in ipairs(flags) do
-                flag = _escape_path_in_flag(target, flag)
-                -- @see https://github.com/xmake-io/xmake/issues/4196
-                if cmake_minver:ge("3.12.0") and #os.argv(flag) > 1 then
-                    cmakelists:print("    " .. os.args("SHELL:" .. flag))
+            if #flags > 0 then
+                local cmake_minver = _get_cmake_minver()
+                if cmake_minver:ge("3.13.0") then
+                    cmakelists:print("target_link_options(%s PRIVATE", target:name())
                 else
-                    cmakelists:print("    " .. flag)
+                    cmakelists:print("target_link_libraries(%s PRIVATE", target:name())
                 end
+                for _, flag in ipairs(flags) do
+                    local prefix
+                    prefix, flag = _split_flag_with_tool_prefix(flag)
+                    if prefix == toolname then
+                        flag = _escape_path_in_flag(target, flag)
+                        -- @see https://github.com/xmake-io/xmake/issues/4196
+                        if cmake_minver:ge("3.12.0") and #os.argv(flag) > 1 then
+                            cmakelists:print("    " .. os.args("SHELL:" .. flag))
+                        else
+                            cmakelists:print("    " .. flag)
+                        end
+                    end
+                    if prefix then
+                        toolnames:insert(prefix)
+                    end
+                end
+                cmakelists:print(")")
             end
-            cmakelists:print(")")
+        end
+    end
+    _add_target_link_options_for_linker()
+    local linkernames = {
+        clang = "Clang",
+        clangxx = "Clang",
+        gcc = "Gcc",
+        gxx = "Gcc",
+        cl = "MSVC",
+        link = "MSVC"
+    }
+    for _, toolname in toolnames:keys() do
+        local name = linkernames[toolname]
+        if name then
+            cmakelists:print("if(%s)", name)
+            _add_target_link_options_for_linker(toolname)
+            cmakelists:print("endif()")
         end
     end
 end

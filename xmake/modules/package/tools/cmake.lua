@@ -29,6 +29,7 @@ import("core.project.project")
 import("lib.detect.find_file")
 import("lib.detect.find_tool")
 import("package.tools.ninja")
+import("package.tools.msbuild")
 import("detect.sdks.find_emsdk")
 import("private.utils.toolchain", {alias = "toolchain_utils"})
 
@@ -76,6 +77,34 @@ function _map_linkflags(package, targetkind, sourcekinds, name, values)
     return linker.map_flags(targetkind, sourcekinds, name, values, {target = package})
 end
 
+-- get pkg-config, we need force to find it, because package install environments will be changed
+function _get_pkgconfig(package)
+    -- meson need fullpath pkgconfig
+    -- @see https://github.com/xmake-io/xmake/issues/5474
+    local dep = package:dep("pkgconf") or package:dep("pkg-config")
+    if dep then
+        local suffix = dep:is_plat("windows", "mingw") and ".exe" or ""
+        local pkgconf = path.join(dep:installdir("bin"), "pkgconf" .. suffix)
+        if os.isfile(pkgconf) then
+            return pkgconf
+        end
+        local pkgconfig = path.join(dep:installdir("bin"), "pkg-config" .. suffix)
+        if os.isfile(pkgconfig) then
+            return pkgconfig
+        end
+    end
+    if package:is_plat("windows") then
+        local pkgconf = find_tool("pkgconf", {force = true})
+        if pkgconf then
+            return pkgconf.program
+        end
+    end
+    local pkgconfig = find_tool("pkg-config", {force = true})
+    if pkgconfig then
+        return pkgconfig.program
+    end
+end
+
 -- is the toolchain compatible with the host?
 function _is_toolchain_compatible_with_host(package)
     for _, name in ipairs(package:config("toolchains")) do
@@ -97,28 +126,33 @@ function _get_msvc_runenvs(package)
     return os.joinenvs(_get_msvc(package):runenvs())
 end
 
--- get vs arch
-function _get_vsarch(package)
-    local arch = package:arch()
-    if arch == 'x86' or arch == 'i386' then return "Win32" end
-    if arch == 'x86_64' then return "x64" end
-    if arch:startswith('arm64') then return "ARM64" end
-    if arch:startswith('arm') then return "ARM" end
-    return arch
-end
-
 -- get cflags from package deps
 function _get_cflags_from_packagedeps(package, opt)
-    local result = {}
+    local values
     for _, depname in ipairs(opt.packagedeps) do
         local dep = type(depname) ~= "string" and depname or package:dep(depname)
         if dep then
-            local fetchinfo = dep:fetch({external = false})
+            local fetchinfo = dep:fetch()
             if fetchinfo then
-                table.join2(result, _map_compflags(package, "cxx", "define", fetchinfo.defines))
-                table.join2(result, _translate_paths(_map_compflags(package, "cxx", "includedir", fetchinfo.includedirs)))
-                table.join2(result, _translate_paths(_map_compflags(package, "cxx", "sysincludedir", fetchinfo.sysincludedirs)))
+                if values then
+                    values = values .. fetchinfo
+                else
+                    values = fetchinfo
+                end
             end
+        end
+    end
+    -- @see https://github.com/xmake-io/xmake-repo/pull/4973#issuecomment-2295890196
+    local result = {}
+    if values then
+        if values.defines then
+            table.join2(result, _map_compflags(package, "cxx", "define", values.defines))
+        end
+        if values.includedirs then
+            table.join2(result, _translate_paths(_map_compflags(package, "cxx", "includedir", values.includedirs)))
+        end
+        if values.sysincludedirs then
+            table.join2(result, _translate_paths(_map_compflags(package, "cxx", "sysincludedir", values.sysincludedirs)))
         end
     end
     return result
@@ -126,17 +160,33 @@ end
 
 -- get ldflags from package deps
 function _get_ldflags_from_packagedeps(package, opt)
-    local result = {}
+    local values
     for _, depname in ipairs(opt.packagedeps) do
         local dep = type(depname) ~= "string" and depname or package:dep(depname)
         if dep then
-            local fetchinfo = dep:fetch({external = false})
+            local fetchinfo = dep:fetch()
             if fetchinfo then
-                table.join2(result, _translate_paths(_map_linkflags(package, "binary", {"cxx"}, "linkdir", fetchinfo.linkdirs)))
-                table.join2(result, _map_linkflags(package, "binary", {"cxx"}, "link", fetchinfo.links))
-                table.join2(result, _translate_paths(_map_linkflags(package, "binary", {"cxx"}, "syslink", fetchinfo.syslinks)))
-                table.join2(result, _map_linkflags(package, "binary", {"cxx"}, "framework", fetchinfo.frameworks))
+                if values then
+                    values = values .. fetchinfo
+                else
+                    values = fetchinfo
+                end
             end
+        end
+    end
+    local result = {}
+    if values then
+        if values.linkdirs then
+            table.join2(result, _translate_paths(_map_linkflags(package, "binary", {"cxx"}, "linkdir", values.linkdirs)))
+        end
+        if values.links then
+            table.join2(result, _map_linkflags(package, "binary", {"cxx"}, "link", values.links))
+        end
+        if values.syslinks then
+            table.join2(result, _translate_paths(_map_linkflags(package, "binary", {"cxx"}, "syslink", values.syslinks)))
+        end
+        if values.frameworks then
+            table.join2(result, _map_linkflags(package, "binary", {"cxx"}, "framework", values.frameworks))
         end
     end
     return result
@@ -297,11 +347,52 @@ function _get_cmake_system_processor(package)
             x64 = "AMD64",
             x86_64 = "AMD64",
             arm = "ARM",
-            arm64 = "ARM64"
+            arm64 = "ARM64",
+            arm64ec = "ARM64EC"
         }
         return archs[package:arch()] or package:arch()
     end
     return package:arch()
+end
+
+-- get mingw32 make
+function _get_mingw32_make(package)
+    local mingw = package:build_getenv("mingw") or package:build_getenv("sdk")
+    if mingw then
+        local mingw_make = _translate_bin_path(path.join(mingw, "bin", "mingw32-make.exe"))
+        if os.isfile(mingw_make) then
+            return mingw_make
+        end
+    end
+end
+
+-- get ninja
+function _get_ninja(package)
+    local ninja = find_tool("ninja")
+    if ninja then
+        return ninja.program
+    end
+end
+
+-- https://github.com/xmake-io/xmake-repo/pull/1096
+function _fix_cxx_compiler_cmake(package, envs)
+    local cxx = envs.CMAKE_CXX_COMPILER
+    if cxx and package:has_tool("cxx", "clang", "gcc") then
+        local dir = path.directory(cxx)
+        local name = path.filename(cxx)
+        name = name:gsub("clang$", "clang++")
+        name = name:gsub("clang%-", "clang++-")
+        name = name:gsub("clang%.", "clang++.")
+        name = name:gsub("gcc$", "g++")
+        name = name:gsub("gcc%-", "g++-")
+        name = name:gsub("gcc%.", "g++.")
+        if dir and dir ~= "." then
+            cxx = path.join(dir, name)
+        else
+            cxx = name
+        end
+        envs.CMAKE_CXX_COMPILER = _translate_bin_path(cxx)
+    end
 end
 
 -- insert configs from envs
@@ -356,6 +447,8 @@ function _get_configs_for_windows(package, configs, opt)
             table.insert(configs, "Win32")
         elseif package:is_arch("arm64") then
             table.insert(configs, "ARM64")
+        elseif package:is_arch("arm64ec") then
+            table.insert(configs, "ARM64EC")
         elseif package:is_arch("arm.*") then
             table.insert(configs, "ARM")
         else
@@ -499,12 +592,12 @@ function _get_configs_for_mingw(package, configs, opt)
     envs.HAVE_FLAG_SEARCH_PATHS_FIRST = "0"
     -- CMAKE_MAKE_PROGRAM may be required for some CMakeLists.txt (libcurl)
     if is_subhost("windows") and opt.cmake_generator ~= "Ninja" then
-        local mingw = assert(package:build_getenv("mingw") or package:build_getenv("sdk"), "mingw not found!")
-        envs.CMAKE_MAKE_PROGRAM = _translate_bin_path(path.join(mingw, "bin", "mingw32-make.exe"))
+        envs.CMAKE_MAKE_PROGRAM = _get_mingw32_make(package)
     end
     if opt.cmake_generator == "Ninja" then
         envs.CMAKE_MAKE_PROGRAM = "ninja"
     end
+    _fix_cxx_compiler_cmake(package, envs)
     _insert_configs_from_envs(configs, envs, opt)
 end
 
@@ -516,9 +609,18 @@ function _get_configs_for_wasm(package, configs, opt)
     local emscripten_cmakefile = find_file("Emscripten.cmake", path.join(emsdk.emscripten, "cmake/Modules/Platform"))
     assert(emscripten_cmakefile, "Emscripten.cmake not found!")
     table.insert(configs, "-DCMAKE_TOOLCHAIN_FILE=" .. emscripten_cmakefile)
-    if is_subhost("windows") and opt.cmake_generator ~= "Ninja" then
-        local mingw = assert(package:build_getenv("mingw") or package:build_getenv("sdk"), "mingw32-make not found!")
-        table.insert(configs, "-DCMAKE_MAKE_PROGRAM=" .. _translate_paths(path.join(mingw, "bin", "mingw32-make.exe")))
+    if is_subhost("windows") then
+        if opt.cmake_generator == "Ninja" then
+            local ninja = _get_ninja(package)
+            if ninja then
+                table.insert(configs, "-DCMAKE_MAKE_PROGRAM=" .. ninja)
+            end
+        else
+            local mingw_make = _get_mingw32_make(package)
+            if mingw_make then
+                table.insert(configs, "-DCMAKE_MAKE_PROGRAM=" .. mingw_make)
+            end
+        end
     end
     _get_configs_for_generic(package, configs, opt)
 end
@@ -533,24 +635,7 @@ function _get_configs_for_cross(package, configs, opt)
     envs.CMAKE_CXX_COMPILER        = _translate_bin_path(package:build_getenv("cxx"))
     envs.CMAKE_ASM_COMPILER        = _translate_bin_path(package:build_getenv("as"))
     envs.CMAKE_AR                  = _translate_bin_path(package:build_getenv("ar"))
-    -- https://github.com/xmake-io/xmake-repo/pull/1096
-    local cxx = envs.CMAKE_CXX_COMPILER
-    if cxx and package:has_tool("cxx", "clang", "gcc") then
-        local dir = path.directory(cxx)
-        local name = path.filename(cxx)
-        name = name:gsub("clang$", "clang++")
-        name = name:gsub("clang%-", "clang++-") -- clang-xx
-        name = name:gsub("clang%.", "clang++.") -- clang.exe
-        name = name:gsub("gcc$", "g++")
-        name = name:gsub("gcc%-", "g++-")
-        name = name:gsub("gcc%.", "g++.")
-        if dir and dir ~= "." then
-            cxx = path.join(dir, name)
-        else
-            cxx = name
-        end
-        envs.CMAKE_CXX_COMPILER = _translate_bin_path(cxx)
-    end
+    _fix_cxx_compiler_cmake(package, envs)
     -- @note The link command line is set in Modules/CMake{C,CXX,Fortran}Information.cmake and defaults to using the compiler, not CMAKE_LINKER,
     -- so we need to set CMAKE_CXX_LINK_EXECUTABLE to use CMAKE_LINKER as linker.
     --
@@ -609,24 +694,7 @@ function _get_configs_for_host_toolchain(package, configs, opt)
     envs.CMAKE_ASM_COMPILER        = _translate_bin_path(package:build_getenv("as"))
     envs.CMAKE_RC_COMPILER         = _translate_bin_path(package:build_getenv("mrc"))
     envs.CMAKE_AR                  = _translate_bin_path(package:build_getenv("ar"))
-    -- https://github.com/xmake-io/xmake-repo/pull/1096
-    local cxx = envs.CMAKE_CXX_COMPILER
-    if cxx and package:has_tool("cxx", "clang", "gcc") then
-        local dir = path.directory(cxx)
-        local name = path.filename(cxx)
-        name = name:gsub("clang$", "clang++")
-        name = name:gsub("clang%-", "clang++-")
-        name = name:gsub("clang%.", "clang++.")
-        name = name:gsub("gcc$", "g++")
-        name = name:gsub("gcc%-", "g++-")
-        name = name:gsub("gcc%.", "g++.")
-        if dir and dir ~= "." then
-            cxx = path.join(dir, name)
-        else
-            cxx = name
-        end
-        envs.CMAKE_CXX_COMPILER = _translate_bin_path(cxx)
-    end
+    _fix_cxx_compiler_cmake(package, envs)
     -- @note The link command line is set in Modules/CMake{C,CXX,Fortran}Information.cmake and defaults to using the compiler, not CMAKE_LINKER,
     -- so we need set CMAKE_CXX_LINK_EXECUTABLE to use CMAKE_LINKER as linker.
     --
@@ -704,15 +772,8 @@ function _get_configs_for_generator(package, configs, opt)
         table.insert(configs, "-G")
         table.insert(configs, _get_cmake_generator_for_msvc(package))
     elseif package:is_plat("wasm") and is_subhost("windows") then
-        -- we attempt to use ninja if it exist
-        -- @see https://github.com/xmake-io/xmake/issues/3771
         table.insert(configs, "-G")
-        if find_tool("ninja") then
-            table.insert(configs, "Ninja")
-            opt.cmake_generator = "Ninja"
-        else
-            table.insert(configs, "MinGW Makefiles")
-        end
+        table.insert(configs, "MinGW Makefiles")
     else
         table.insert(configs, "-G")
         table.insert(configs, "Unix Makefiles")
@@ -875,6 +936,17 @@ function _get_configs(package, configs, opt)
     return configs
 end
 
+-- Fix pdb issue, if multiple CL.EXE write to the same .PDB file, please use /FS
+-- @see https://github.com/xmake-io/xmake/issues/5353
+function _fix_pdbdir_for_ninja(package)
+    if package:is_plat("windows") and package:has_tool("cxx", "cl") then
+        local pdbdir = "pdb"
+        if not os.isdir(pdbdir) then
+            os.mkdir(pdbdir)
+        end
+    end
+end
+
 -- get build environments
 function buildenvs(package, opt)
 
@@ -888,9 +960,9 @@ function buildenvs(package, opt)
 
     -- we need to pass pkgconf for windows/mingw without msys2/cygwin
     if package:is_plat("windows", "mingw") and is_subhost("windows") then
-        local pkgconf = find_tool("pkgconf")
+        local pkgconf = _get_pkgconfig(package)
         if pkgconf then
-            envs.PKG_CONFIG = pkgconf.program
+            envs.PKG_CONFIG = pkgconf
         end
     end
 
@@ -930,14 +1002,9 @@ end
 
 -- do build for msvc
 function _build_for_msvc(package, configs, opt)
-    local jobs = _get_parallel_njobs(opt)
-    local slnfile = assert(find_file("*.sln", os.curdir()), "*.sln file not found!")
-    local runenvs = _get_msvc_runenvs(package)
-    local msbuild = find_tool("msbuild", {envs = runenvs})
-    os.vrunv(msbuild.program, {slnfile, "-nologo", "-t:Rebuild",
-            (jobs ~= nil and format("-m:%d", jobs) or "-m"),
-            "-p:Configuration=" .. (package:is_debug() and "Debug" or "Release"),
-            "-p:Platform=" .. _get_vsarch(package)}, {envs = runenvs})
+    local allbuild = os.isfile("ALL_BUILD.vcxproj") and "ALL_BUILD.vcxproj" or "ALL_BUILD.vcproj"
+    assert(os.isfile(allbuild), "ALL_BUILD project not found!")
+    msbuild.build(package, {allbuild, "-t:Rebuild"})
 end
 
 -- do build for make
@@ -954,8 +1021,7 @@ function _build_for_make(package, configs, opt)
     if is_host("bsd") then
         os.vrunv("gmake", argv)
     elseif is_subhost("windows") and package:is_plat("mingw") then
-        local mingw = assert(package:build_getenv("mingw") or package:build_getenv("sdk"), "mingw not found!")
-        local mingw_make = path.join(mingw, "bin", "mingw32-make.exe")
+        local mingw_make = assert(_get_mingw32_make(package), "mingw32-make.exe not found!")
         os.vrunv(mingw_make, argv)
     elseif package:is_plat("android") and is_host("windows") then
         local make
@@ -975,6 +1041,7 @@ end
 -- do build for ninja
 function _build_for_ninja(package, configs, opt)
     opt = opt or {}
+    _fix_pdbdir_for_ninja(package)
     ninja.build(package, {}, {envs = opt.envs or buildenvs(package, opt),
         jobs = opt.jobs,
         target = opt.target})
@@ -997,17 +1064,12 @@ end
 
 -- do install for msvc
 function _install_for_msvc(package, configs, opt)
-    local jobs = _get_parallel_njobs(opt)
-    local slnfile = assert(find_file("*.sln", os.curdir()), "*.sln file not found!")
-    local runenvs = _get_msvc_runenvs(package)
-    local msbuild = assert(find_tool("msbuild", {envs = runenvs}), "msbuild not found!")
-    os.vrunv(msbuild.program, {slnfile, "-nologo", "-t:Rebuild", "/nr:false",
-        (jobs ~= nil and format("-m:%d", jobs) or "-m"),
-        "-p:Configuration=" .. (package:is_debug() and "Debug" or "Release"),
-        "-p:Platform=" .. _get_vsarch(package)}, {envs = runenvs})
+    local allbuild = os.isfile("ALL_BUILD.vcxproj") and "ALL_BUILD.vcxproj" or "ALL_BUILD.vcproj"
+    assert(os.isfile(allbuild), "ALL_BUILD project not found!")
+    msbuild.build(package, {allbuild, "-t:Rebuild", "/nr:false"})
     local projfile = os.isfile("INSTALL.vcxproj") and "INSTALL.vcxproj" or "INSTALL.vcproj"
     if os.isfile(projfile) then
-        os.vrunv(msbuild.program, {projfile, "/property:configuration=" .. (package:is_debug() and "Debug" or "Release")}, {envs = runenvs})
+        msbuild.build(package, {projfile})
         os.trycp("install/bin", package:installdir())
         os.trycp("install/lib", package:installdir()) -- perhaps only headers library
         os.trycp("install/share", package:installdir())
@@ -1035,8 +1097,7 @@ function _install_for_make(package, configs, opt)
         os.vrunv("gmake", argv)
         os.vrunv("gmake", {"install"})
     elseif is_subhost("windows") and package:is_plat("mingw", "wasm") then
-        local mingw = assert(package:build_getenv("mingw") or package:build_getenv("sdk"), "mingw not found!")
-        local mingw_make = path.join(mingw, "bin", "mingw32-make.exe")
+        local mingw_make = assert(_get_mingw32_make(package), "mingw32-make.exe not found!")
         os.vrunv(mingw_make, argv)
         os.vrunv(mingw_make, {"install"})
     elseif package:is_plat("android") and is_host("windows") then
@@ -1059,6 +1120,7 @@ end
 -- do install for ninja
 function _install_for_ninja(package, configs, opt)
     opt = opt or {}
+    _fix_pdbdir_for_ninja(package)
     ninja.install(package, {}, {envs = opt.envs or buildenvs(package, opt),
         jobs = opt.jobs,
         target = opt.target})
@@ -1082,12 +1144,17 @@ function _get_cmake_generator(package, opt)
     opt = opt or {}
     local cmake_generator = opt.cmake_generator
     if not cmake_generator then
-        if project.policy("package.cmake_generator.ninja") then
+        if project.policy("package.cmake_generator.ninja") or package:policy("package.cmake_generator.ninja") then
             cmake_generator = "Ninja"
         end
         if not cmake_generator then
             if package:has_tool("cc", "clang_cl") or package:has_tool("cxx", "clang_cl") then
                 cmake_generator = "Ninja"
+            elseif is_subhost("windows") and package:is_plat("mingw", "wasm") then
+                local ninja = _get_ninja(package)
+                if ninja then
+                    cmake_generator = "Ninja"
+                end
             end
         end
         local cmake_generator_env = os.getenv("CMAKE_GENERATOR")

@@ -572,6 +572,11 @@ function _instance:is_headeronly()
     return self:is_library() and self:extraconf("kind", "library", "headeronly")
 end
 
+-- is module only?
+function _instance:is_moduleonly()
+    return self:is_library() and self:extraconf("kind", "library", "moduleonly")
+end
+
 -- is top level? user top requires in xmake.lua
 function _instance:is_toplevel()
     local requireinfo = self:requireinfo()
@@ -778,9 +783,9 @@ function _instance:cachedir()
             --
             local name = self:displayname():lower():gsub("::", "_"):gsub("#", "_")
             local version_str = self:version_str()
-            if self:is_thirdparty() then
-                -- strip `>= <=`
-                version_str = version_str:gsub("[>=<]", "")
+            -- strip invalid characters on windows, e.g. `>= <=`
+            if os.is_host("windows") then
+                version_str = version_str:gsub("[>=<|%*]", "")
             end
             if self:is_local() then
                 cachedir = path.join(config.buildir({absolute = true}), ".packages", name:sub(1, 1):lower(), name, version_str, "cache")
@@ -807,9 +812,9 @@ function _instance:installdir(...)
             end
             local version_str = self:version_str()
             if version_str then
-                if self:is_thirdparty() then
-                    -- strip `>= <=`
-                    version_str = version_str:gsub("[>=<]", "")
+                -- strip invalid characters on windows, e.g. `>= <=`
+                if os.is_host("windows") then
+                    version_str = version_str:gsub("[>=<|%*]", "")
                 end
                 installdir = path.join(installdir, version_str)
             end
@@ -1021,8 +1026,12 @@ function _instance:_load()
         if on_load then
             on_load(self)
         end
-        self._LOADED = true
     end
+end
+
+-- mark as loaded package
+function _instance:_mark_as_loaded()
+    self._LOADED = true
 end
 
 -- get the raw environments
@@ -1032,7 +1041,10 @@ function _instance:_rawenvs()
         envs = {}
 
         -- add bin PATH
-        if self:is_binary() or self:is_plat("windows", "mingw") then -- bin/*.dll for windows
+        local bindirs = self:get("bindirs")
+        if bindirs then
+            envs.PATH = table.wrap(bindirs)
+        elseif self:is_binary() or self:is_plat("windows", "mingw") then -- bin/*.dll for windows
             envs.PATH = {"bin"}
         end
 
@@ -1863,6 +1875,7 @@ function _instance:find_tool(name, opt)
     self._find_tool = self._find_tool or sandbox_module.import("lib.detect.find_tool", {anonymous = true})
     return self._find_tool(name, {cachekey = opt.cachekey or "fetch_package_system",
                                   installdir = self:installdir({readonly = true}),
+                                  bindirs = self:get("bindirs"),
                                   version = true, -- we alway check version
                                   require_version = opt.require_version,
                                   norun = opt.norun,
@@ -1888,6 +1901,7 @@ function _instance:find_package(name, opt)
     return self._find_package(name, {
                               force = opt.force,
                               installdir = self:installdir({readonly = true}),
+                              bindirs = self:get("bindirs"),
                               version = true, -- we alway check version
                               require_version = opt.require_version,
                               mode = self:mode(),
@@ -1921,7 +1935,8 @@ function _instance:fetch(opt)
 
     -- attempt to get it from cache
     local fetchinfo = self._FETCHINFO
-    if not opt.force and opt.external == nil and opt.system == nil and fetchinfo then
+    local usecache = opt.external == nil and opt.system == nil
+    if not opt.force and usecache and fetchinfo then
         return fetchinfo
     end
 
@@ -2016,7 +2031,9 @@ function _instance:fetch(opt)
     end
 
     -- save to cache
-    self._FETCHINFO = fetchinfo
+    if usecache then
+        self._FETCHINFO = fetchinfo
+    end
 
     -- we need to update the real version if it's system package
     -- @see https://github.com/xmake-io/xmake/issues/3333
@@ -2346,7 +2363,7 @@ function _instance:_generate_build_configs(configs, opt)
         if not linker then
             os.raise(errors)
         end
-        local fake_target = {is_shared = function(_) return false end, 
+        local fake_target = {is_shared = function(_) return false end,
                              sourcekinds = function(_) return sourcekind end}
         local compiler = self:compiler(sourcekind)
         local cxflags = compiler:map_flags("runtime", runtimes, {target = fake_target})
@@ -2396,6 +2413,17 @@ function _instance:_generate_build_configs(configs, opt)
         configs.force = {ldflags = configs.ldflags, shflags = configs.shflags}
         configs.ldflags = nil
         configs.shflags = nil
+    end
+
+    -- check links for library
+    if self:is_library() and not self:is_headeronly() and not self:is_moduleonly()
+        and self:exists() then -- we need to skip it if it's in on_check, @see https://github.com/xmake-io/xmake-repo/pull/4834
+        local links = table.wrap(configs.links)
+        local ldflags = table.wrap(configs.ldflags)
+        local frameworks = table.wrap(configs.frameworks)
+        if #links == 0 and #ldflags == 0 and #frameworks == 0 then
+            os.raise("package(%s): links not found!", self:name())
+        end
     end
     return configs
 end
@@ -2704,6 +2732,7 @@ function package.apis()
         ,   "package.set_sourcedir"
         ,   "package.set_cachedir"
         ,   "package.set_installdir"
+        ,   "package.add_bindirs"
             -- package.add_xxx
         ,   "package.add_deps"
         ,   "package.add_urls"

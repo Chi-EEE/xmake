@@ -186,6 +186,16 @@ function _load_vcvarsall(vcvarsall, vsver, arch, opt)
         if WindowsSDKVersion ~= "" then
             variables["WindowsSDKVersion"] = WindowsSDKVersion
         end
+    else
+        -- sometimes the variable `WindowsSDKVersion` is not available
+        -- then parse it from `WindowsSdkBinPath`, such as: `C:\\Program Files (x86)\\Windows Kits\\8.1\\bin`
+        local WindowsSdkBinPath = variables["WindowsSdkBinPath"]
+        if WindowsSdkBinPath then
+            WindowsSDKVersion = string.match(WindowsSdkBinPath, "\\(%d+%.%d+)\\bin$")
+            if WindowsSDKVersion then
+                variables["WindowsSDKVersion"] = WindowsSDKVersion
+            end
+        end
     end
 
     -- fix UCRTVersion
@@ -266,13 +276,25 @@ function _find_vstudio(opt)
         if vcvarsall and os.isfile(vcvarsall) and vsvers[VisualStudioVersion] then
 
             -- load vcvarsall
-            local vcvarsall_x86   = _load_vcvarsall(vcvarsall, VisualStudioVersion, "x86", opt)
-            local vcvarsall_x64   = _load_vcvarsall(vcvarsall, VisualStudioVersion, "x64", opt)
-            local vcvarsall_arm64 = _load_vcvarsall(vcvarsall, VisualStudioVersion, "arm64", opt)
+            local vcvarsall_x86     = _load_vcvarsall(vcvarsall, VisualStudioVersion, "x86", opt)
+            local vcvarsall_x64     = _load_vcvarsall(vcvarsall, VisualStudioVersion, "x64", opt)
+            local vcvarsall_arm     = _load_vcvarsall(vcvarsall, VisualStudioVersion, "arm", opt)
+            local vcvarsall_arm64   = _load_vcvarsall(vcvarsall, VisualStudioVersion, "arm64", opt)
+            local vcvarsall_arm64ec = vcvarsall_arm64
 
             -- save results
             local results = {}
-            results[vsvers[VisualStudioVersion]] = {version = VisualStudioVersion, vcvarsall_bat = vcvarsall, vcvarsall = {x86 = vcvarsall_x86, x64 = vcvarsall_x64, arm64 = vcvarsall_arm64}}
+            results[vsvers[VisualStudioVersion]] = {
+                version = VisualStudioVersion,
+                vcvarsall_bat = vcvarsall,
+                vcvarsall = {
+                    x86 = vcvarsall_x86,
+                    x64 = vcvarsall_x64,
+                    arm = vcvarsall_arm,
+                    arm64 = vcvarsall_arm64,
+                    arm64ec = vcvarsall_arm64ec
+                }
+            }
             return results
         end
     end
@@ -317,6 +339,10 @@ function _find_vstudio(opt)
         if vswhere_VCAuxiliaryBuildDir and os.isdir(vswhere_VCAuxiliaryBuildDir) then
             table.insert(paths, 1, vswhere_VCAuxiliaryBuildDir)
         end
+        if version == "6.0" and os.arch() == "x64" then
+            table.insert(paths, "$(reg HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\DevStudio\\6.0\\Products\\Microsoft Visual C++;ProductDir)\\Bin")
+            table.insert(paths, "$(reg HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\6.0\\Setup\\Microsoft Visual C++;ProductDir)\\Bin")
+        end
 
         -- find vcvarsall.bat, vcvars32.bat for vs7.1
         local vcvarsall = find_file("vcvarsall.bat", paths) or find_file("vcvars32.bat", paths)
@@ -343,6 +369,7 @@ function _find_vstudio(opt)
                 table.insert(paths, path.join(logical_drive, "Program Files", "Microsoft Visual Studio " .. version, "VC"))
                 if version == "6.0" then
                     table.insert(paths, path.join(logical_drive, "Program Files", "Microsoft Visual Studio", "VC98", "Bin"))
+                    table.insert(paths, path.join(logical_drive, "Program Files (x86)", "Microsoft Visual Studio", "VC98", "Bin"))
                 end
             end
             vcvarsall = find_file("vcvarsall.bat", paths) or find_file("vcvars32.bat", paths)
@@ -360,12 +387,24 @@ function _find_vstudio(opt)
         if vcvarsall then
 
             -- load vcvarsall
-            local vcvarsall_x86   = _load_vcvarsall(vcvarsall, version, "x86", opt)
-            local vcvarsall_x64   = _load_vcvarsall(vcvarsall, version, "x64", opt)
-            local vcvarsall_arm64 = _load_vcvarsall(vcvarsall, version, "arm64", opt)
+            local vcvarsall_x86     = _load_vcvarsall(vcvarsall, version, "x86", opt)
+            local vcvarsall_x64     = _load_vcvarsall(vcvarsall, version, "x64", opt)
+            local vcvarsall_arm     = _load_vcvarsall(vcvarsall, version, "arm", opt)
+            local vcvarsall_arm64   = _load_vcvarsall(vcvarsall, version, "arm64", opt)
+            local vcvarsall_arm64ec = vcvarsall_arm64
 
             -- save results
-            results[vsvers[version]] = {version = version, vcvarsall_bat = vcvarsall, vcvarsall = {x86 = vcvarsall_x86, x64 = vcvarsall_x64, arm64 = vcvarsall_arm64}}
+            results[vsvers[version]] = {
+                version = version,
+                vcvarsall_bat = vcvarsall,
+                vcvarsall = {
+                    x86 = vcvarsall_x86,
+                    x64 = vcvarsall_x64,
+                    arm = vcvarsall_arm,
+                    arm64 = vcvarsall_arm64,
+                    arm64ec = vcvarsall_arm64ec
+                }
+            }
         end
     end
     return results
@@ -464,3 +503,4 @@ function main(opt)
     end
     return vstudio
 end
+

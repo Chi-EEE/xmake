@@ -113,7 +113,7 @@ function _get_command_strings(package, cmd, opt)
             local dstname = path.filename(dstfile)
             local dstdir = path.normalize(path.directory(dstfile))
             table.insert(result, string.format("SetOutPath \"%s\"", dstdir))
-            table.insert(result, string.format("File /oname=%s \"%s\"", dstname, srcfile))
+            table.insert(result, string.format("File \"/oname=%s\" \"%s\"", dstname, srcfile))
         end
     elseif kind == "rm" then
         local filepath = _translate_filepath(package, cmd.filepath)
@@ -201,6 +201,10 @@ function _get_specvars(package)
     specvars.PACKAGE_WORKDIR = path.absolute(os.projectdir())
     specvars.PACKAGE_BINDIR = _translate_filepath(package, package:bindir())
     specvars.PACKAGE_OUTPUTFILE = path.absolute(package:outputfile())
+    if specvars.PACKAGE_VERSION_BUILD then
+        -- @see https://github.com/xmake-io/xmake/issues/5306
+        specvars.PACKAGE_VERSION_BUILD = specvars.PACKAGE_VERSION_BUILD:gsub(" ", "_")
+    end
     specvars.PACKAGE_INSTALLCMDS = function ()
         return _get_installcmds(package)
     end
@@ -229,7 +233,7 @@ function _get_specvars(package)
             table.insert(install_sections, string.format('Section%s "%s" %s', component:get("default") == false and " /o" or "", component:title(), tag))
             table.insert(install_sections, installcmds)
             table.insert(install_sections, "SectionEnd")
-            table.insert(install_descs, string.format('LangString DESC_%s ${LANG_ENGLISH} "%s"', tag, description))
+            table.insert(install_descs, string.format('LangString DESC_%s ${LANG_ENGLISH} "%s"', tag, component:description() or ""))
             table.insert(install_description_texts, string.format('!insertmacro MUI_DESCRIPTION_TEXT ${%s} $(DESC_%s)', tag, tag))
         end
         local uninstallcmds = _get_component_uninstallcmds(component)
@@ -256,23 +260,35 @@ function _pack_nsis(makensis, package)
         os.cp(specfile_template, specfile)
     end
 
-    -- replace variables in specfile
+    -- replace variables in specfile,
+    -- and we need to avoid `attempt to yield across a C-call boundary` in io.gsub
     local specvars = _get_specvars(package)
     local pattern = package:extraconf("specfile", "pattern") or "%${([^\n]-)}"
+    local specvars_names = {}
+    local specvars_values = {}
+    io.gsub(specfile, "(" .. pattern .. ")", function(_, name)
+        table.insert(specvars_names, name)
+    end, {encoding = "ansi"})
+    for _, name in ipairs(specvars_names) do
+        name = name:trim()
+        if specvars_values[name] == nil then
+            local value = specvars[name]
+            if type(value) == "function" then
+                value = value()
+            end
+            if value ~= nil then
+                dprint("  > replace %s -> %s", name, value)
+            end
+            if type(value) == "table" then
+                dprint("invalid variable value", value)
+            end
+            specvars_values[name] = value
+        end
+    end
     io.gsub(specfile, "(" .. pattern .. ")", function(_, name)
         name = name:trim()
-        local value = specvars[name]
-        if type(value) == "function" then
-            value = value()
-        end
-        if value ~= nil then
-            dprint("  > replace %s -> %s", name, value)
-        end
-        if type(value) == "table" then
-            dprint("invalid variable value", value)
-        end
-        return value
-    end)
+        return specvars_values[name]
+    end, {encoding = "ansi"})
 
     -- make package
     os.vrunv(makensis, {specfile})

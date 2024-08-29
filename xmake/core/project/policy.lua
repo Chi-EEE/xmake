@@ -40,6 +40,8 @@ function policy.policies()
             ["check.auto_map_flags"]              = {description = "Enable map gcc flags to the current compiler and linker automatically.", default = true, type = "boolean"},
             -- We will check the compatibility of target and package licenses
             ["check.target_package_licenses"]     = {description = "Enable check the compatibility of target and package licenses.", default = true, type = "boolean"},
+            -- Generate intermediate build directory
+            ["build.intermediate_directory"]      = {description = "Generate intermediate build directory.", default = true, type = "boolean"},
             -- Provide a way to block all targets build that depends on self
             ["build.fence"]                       = {description = "Block all targets build that depends on self.", default = false, type = "boolean"},
             -- We can compile the source files for each target in parallel
@@ -66,10 +68,14 @@ function policy.policies()
             ["build.sanitizer.leak"]              = {description = "Enable leak sanitizer for c/c++ building.", type = "boolean"},
             -- Enable undefined sanitizer for c/c++ building.
             ["build.sanitizer.undefined"]         = {description = "Enable undefined sanitizer for c/c++ building.", type = "boolean"},
+            -- Enable build rpath
+            ["build.rpath"]                       = {description = "Enable build rpath.", default = true, type = "boolean"},
             -- Enable C++ modules for C++ building, even if no .mpp is involved in the compilation
             ["build.c++.modules"]                 = {description = "Enable C++ modules for C++ building.", type = "boolean"},
             -- Enable std module
             ["build.c++.modules.std"]             = {description = "Enable std modules.", default = true, type = "boolean"},
+            -- Enable unreferenced and non-public named module culling
+            ["build.c++.modules.culling"]         = {description = "Enable unrefereced and non-public named module culling.", default = true, type = "boolean"},
             -- Try to reuse compiled module bmi file if targets flags permit it
             ["build.c++.modules.tryreuse"]        = {description = "Try to reuse compiled module if possible.", default = true, type = "boolean"},
             -- Enable module taking defines acbount for bmi reuse discrimination
@@ -92,6 +98,8 @@ function policy.policies()
             ["windows.manifest.uac.ui"]           = {description = "Enable windows manifest UAC.", type = "boolean"},
             -- Automatically build before running
             ["run.autobuild"]                     = {description = "Automatically build before running.", type = "boolean"},
+            -- Enable install rpath
+            ["install.rpath"]                     = {description = "Enable install rpath.", default = true, type = "boolean"},
             -- Preprocessor configuration for ccache/distcc, we can disable linemarkers to speed up preprocess
             ["preprocessor.linemarkers"]          = {description = "Enable linemarkers for preprocessor.", default = true, type = "boolean"},
             -- Preprocessor configuration for ccache/distcc, we can disable it to avoid cache object file with __DATE__, __TIME__
@@ -129,6 +137,8 @@ function policy.policies()
             ["package.xmake.pass_depconfs"]       = {description = "Automatically passes dependency configuration for inner xmake package", default = true, type = "boolean"},
             -- It will force cmake package use ninja for build
             ["package.cmake_generator.ninja"]     = {description = "Set cmake package use ninja for build", default = false, type = "boolean"},
+            -- Enable msbuild MultiToolTask
+            ["package.msbuild.multi_tool_task"]   = {description = "Enable msbuild MultiToolTask.", default = false, type = "boolean"},
             -- Stop to test on the first failure
             ["test.stop_on_first_failure"]        = {description = "Stop to test on the first failure", default = false, type = "boolean"},
             -- Return zero as exit code on failure

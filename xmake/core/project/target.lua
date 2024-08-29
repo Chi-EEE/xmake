@@ -976,7 +976,7 @@ function _instance:soname()
     if not self:is_shared() then
         return
     end
-    if not self:is_plat("macosx", "linux", "bsd", "cross") then
+    if self:is_plat("windows", "mingw", "cygwin", "msys") then
         return
     end
     local version = self:get("version")
@@ -1374,24 +1374,21 @@ function _instance:objectdir(opt)
     objectdir = path.join(objectdir, self:name())
 
     -- get root directory of target
-    if opt and opt.root then
+    local intermediate_directory = self:policy("build.intermediate_directory")
+    if (opt and opt.root) or intermediate_directory == false then
         return objectdir
     end
 
-    -- append plat sub-directory
+    -- generate intermediate directory
     local plat = self:plat()
     if plat then
         objectdir = path.join(objectdir, plat)
     end
-
-    -- append arch sub-directory
     local arch = self:arch()
     if arch then
         objectdir = path.join(objectdir, arch)
     end
-
-    -- append mode sub-directory
-    local mode = config.get("mode")
+    local mode = config.mode()
     if mode then
         objectdir = path.join(objectdir, mode)
     end
@@ -1409,24 +1406,21 @@ function _instance:dependir(opt)
     dependir = path.join(dependir, self:name())
 
     -- get root directory of target
-    if opt and opt.root then
+    local intermediate_directory = self:policy("build.intermediate_directory")
+    if (opt and opt.root) or intermediate_directory == false then
         return dependir
     end
 
-    -- append plat sub-directory
+    -- generate intermediate directory
     local plat = self:plat()
     if plat then
         dependir = path.join(dependir, plat)
     end
-
-    -- append arch sub-directory
     local arch = self:arch()
     if arch then
         dependir = path.join(dependir, arch)
     end
-
-    -- append mode sub-directory
-    local mode = config.get("mode")
+    local mode = config.mode()
     if mode then
         dependir = path.join(dependir, mode)
     end
@@ -1436,28 +1430,29 @@ end
 -- get the autogen files directory
 function _instance:autogendir(opt)
 
-    -- the autogen directory
-    local autogendir = path.join(config.buildir(), ".gens", self:name())
+    -- init the autogen directory
+    local autogendir = self:get("autogendir")
+    if not autogendir then
+        autogendir = path.join(config.buildir(), ".gens")
+    end
+    autogendir = path.join(autogendir, self:name())
 
     -- get root directory of target
-    if opt and opt.root then
+    local intermediate_directory = self:policy("build.intermediate_directory")
+    if (opt and opt.root) or intermediate_directory == false then
         return autogendir
     end
 
-    -- append plat sub-directory
+    -- generate intermediate directory
     local plat = self:plat()
     if plat then
         autogendir = path.join(autogendir, plat)
     end
-
-    -- append arch sub-directory
     local arch = self:arch()
     if arch then
         autogendir = path.join(autogendir, arch)
     end
-
-    -- append mode sub-directory
-    local mode = config.get("mode")
+    local mode = config.mode()
     if mode then
         autogendir = path.join(autogendir, mode)
     end
@@ -1517,24 +1512,24 @@ function _instance:targetdir()
     -- the target directory
     local targetdir = self:get("targetdir")
     if not targetdir then
-
-        -- get build directory
         targetdir = config.buildir()
 
-        -- append plat sub-directory
+        -- get root directory of target
+        local intermediate_directory = self:policy("build.intermediate_directory")
+        if intermediate_directory == false then
+            return targetdir
+        end
+
+        -- generate intermediate directory
         local plat = self:plat()
         if plat then
             targetdir = path.join(targetdir, plat)
         end
-
-        -- append arch sub-directory
         local arch = self:arch()
         if arch then
             targetdir = path.join(targetdir, arch)
         end
-
-        -- append mode sub-directory
-        local mode = config.get("mode")
+        local mode = config.mode()
         if mode then
             targetdir = path.join(targetdir, mode)
         end
@@ -1628,20 +1623,56 @@ function _instance:rundir()
     return baseoption.get("workdir") or self:get("rundir") or path.directory(self:targetfile())
 end
 
--- get install directory
-function _instance:installdir()
+-- get prefix directory
+function _instance:prefixdir()
+    return self:get("prefixdir")
+end
 
-    -- get it from the cache
+-- get the installed binary directory
+function _instance:bindir()
+    local bindir = self:extraconf("prefixdir", self:prefixdir(), "bindir")
+    if bindir == nil then
+        bindir = "bin"
+    end
+    return self:installdir(bindir)
+end
+
+-- get the installed library directory
+function _instance:libdir()
+    local libdir = self:extraconf("prefixdir", self:prefixdir(), "libdir")
+    if libdir == nil then
+        libdir = "lib"
+    end
+    return self:installdir(libdir)
+end
+
+-- get the installed include directory
+function _instance:includedir()
+    local includedir = self:extraconf("prefixdir", self:prefixdir(), "includedir")
+    if includedir == nil then
+        includedir = "include"
+    end
+    return self:installdir(includedir)
+end
+
+-- get install directory
+function _instance:installdir(...)
+    opt = opt or {}
     local installdir = baseoption.get("installdir")
     if not installdir then
-
         -- DESTDIR: be compatible with https://www.gnu.org/prep/standards/html_node/DESTDIR.html
         installdir = self:get("installdir") or os.getenv("INSTALLDIR") or os.getenv("PREFIX") or os.getenv("DESTDIR") or platform.get("installdir")
         if installdir then
             installdir = installdir:trim()
         end
     end
-    return installdir
+    if installdir then
+        local prefixdir = self:prefixdir()
+        if prefixdir then
+            installdir = path.join(installdir, prefixdir)
+        end
+        return path.normalize(path.join(installdir, ...))
+    end
 end
 
 -- get package directory
@@ -2005,7 +2036,7 @@ end
 -- get the header files
 function _instance:headerfiles(outputdir, opt)
     opt = opt or {}
-    local headerfiles = self:get("headerfiles")
+    local headerfiles = self:get("headerfiles", opt) or {}
     -- add_headerfiles("src/*.h", {install = false})
     -- @see https://github.com/xmake-io/xmake/issues/2577
     if opt.installonly then
@@ -2021,13 +2052,12 @@ function _instance:headerfiles(outputdir, opt)
         return
     end
 
-    local headerdir = outputdir
-    if not headerdir then
-        if self:installdir() then
-            headerdir = path.join(self:installdir(), "include")
+    if not outputdir then
+        if self:includedir() then
+            outputdir = self:includedir()
         end
     end
-    return match_copyfiles(self, "headerfiles", headerdir, {copyfiles = headerfiles})
+    return match_copyfiles(self, "headerfiles", outputdir, {copyfiles = headerfiles})
 end
 
 -- get the configuration files
@@ -2041,8 +2071,9 @@ function _instance:configfiles(outputdir)
 end
 
 -- get the install files
-function _instance:installfiles(outputdir)
-    return match_copyfiles(self, "installfiles", outputdir or self:installdir())
+function _instance:installfiles(outputdir, opt)
+    local installfiles = self:get("installfiles", opt) or {}
+    return match_copyfiles(self, "installfiles", outputdir or self:installdir(), {copyfiles = installfiles})
 end
 
 -- get the extra files
@@ -2291,14 +2322,17 @@ function _instance:pcoutputfile(langkind)
     -- get the precompiled header file in the object directory
     local pcheaderfile = self:pcheaderfile(langkind)
     if pcheaderfile then
-
-        -- is gcc?
         local is_gcc = false
+        local is_msvc = false
         local sourcekinds = {c = "cc", cxx = "cxx", m = "mm", mxx = "mxx"}
         local sourcekind = assert(sourcekinds[langkind], "unknown language kind: " .. langkind)
         local _, toolname = self:tool(sourcekind)
-        if toolname and (toolname == "gcc" or toolname == "gxx") then
-            is_gcc = true
+        if toolname then
+            if toolname == "gcc" or toolname == "gxx" then
+                is_gcc = true
+            elseif toolname == "cl" then
+                is_msvc = true
+            end
         end
 
         -- make precompiled output file
@@ -2306,7 +2340,27 @@ function _instance:pcoutputfile(langkind)
         -- @note gcc has not -include-pch option to set the pch file path
         --
         pcoutputfile = self:objectfile(pcheaderfile)
-        pcoutputfile = path.join(path.directory(pcoutputfile), sourcekind, path.basename(pcoutputfile) .. (is_gcc and ".gch" or ".pch"))
+        local pcoutputfilename = path.basename(pcoutputfile)
+        if is_gcc then
+            pcoutputfilename = pcoutputfilename .. ".gch"
+        else
+            -- different vs versions of pch files are not backward compatible,
+            -- so we need to distinguish between them.
+            --
+            -- @see https://github.com/xmake-io/xmake/issues/5413
+            local msvc = self:toolchain("msvc")
+            if is_msvc and msvc then
+                local vs_toolset = msvc:config("vs_toolset")
+                if vs_toolset then
+                    vs_toolset = sandbox_module.import("private.utils.toolchain", {anonymous = true}).get_vs_toolset_ver(vs_toolset)
+                end
+                if vs_toolset then
+                    pcoutputfilename = pcoutputfilename .. "_" .. vs_toolset
+                end
+            end
+            pcoutputfilename = pcoutputfilename .. ".pch"
+        end
+        pcoutputfile = path.join(path.directory(pcoutputfile), sourcekind, pcoutputfilename)
         self._PCOUTPUTFILES[langkind] = pcoutputfile
         return pcoutputfile
     end
@@ -2742,6 +2796,7 @@ function target.apis()
         ,   "target.set_runargs"
         ,   "target.set_exceptions"
         ,   "target.set_encodings"
+        ,   "target.set_prefixdir"
             -- target.add_xxx
         ,   "target.add_deps"
         ,   "target.add_rules"
@@ -2771,6 +2826,7 @@ function target.apis()
             "target.set_targetdir"
         ,   "target.set_objectdir"
         ,   "target.set_dependir"
+        ,   "target.set_autogendir"
         ,   "target.set_configdir"
         ,   "target.set_installdir"
         ,   "target.set_rundir"
